@@ -203,10 +203,16 @@ def bootstrap_auth() -> None:
 
 
 def try_restore_session() -> None:
-    """Validate saved token once per session (can be slow — not at module import)."""
-    if ss.authed or ss.get("_auth_restore_attempted"):
+    """Restore a saved Kite token. Retries (rate-limited) rather than once per
+    session — on Streamlit Cloud the websocket can drop right after login, and a
+    reconnect must be able to pick the freshly saved token back up."""
+    if ss.authed:
         return
-    ss._auth_restore_attempted = True
+    import time as _time
+    last = float(ss.get("_auth_restore_last") or 0.0)
+    if _time.time() - last < 30.0:
+        return
+    ss._auth_restore_last = _time.time()
     try:
         zerodha_auth._load_token()
         if not zerodha_auth.kite.access_token:
