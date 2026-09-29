@@ -765,6 +765,18 @@ def mode_selector(snap) -> None:
                     "setups during 10:15–14:45 IST — <b>real MIS orders, real money</b>.</p></div>",
                     unsafe_allow_html=True,
                 )
+                if is_streamlit_cloud():
+                    st.warning(
+                        "Live trading is disabled on Streamlit Cloud: the container "
+                        "sleeps/restarts and can't run the engine reliably, and a second "
+                        "engine would duplicate orders against the same Kite account. "
+                        "Trade from the local dashboard; use this copy to monitor."
+                    )
+                    st.button(
+                        "Start live trading", use_container_width=True,
+                        key="mode_live_btn", disabled=True,
+                    )
+                    return
                 confirm = st.checkbox(
                     "I understand real orders will be placed with real money",
                     key="mode_live_confirm",
