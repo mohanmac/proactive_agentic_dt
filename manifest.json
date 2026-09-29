@@ -8,12 +8,12 @@
     "description": "Premium AI-Powered Day Trading Bot for Indian Markets",
     "icons": [
         {
-            "src": "https://raw.githubusercontent.com/mohanmac/agentic_dt/main/favicon.png",
+            "src": "https://raw.githubusercontent.com/mohanmac/proactive_agentic_dt/main/favicon.png",
             "sizes": "192x192",
             "type": "image/png"
         },
         {
-            "src": "https://raw.githubusercontent.com/mohanmac/agentic_dt/main/favicon_512.png",
+            "src": "https://raw.githubusercontent.com/mohanmac/proactive_agentic_dt/main/favicon_512.png",
             "sizes": "512x512",
             "type": "image/png"
         }
