@@ -40,8 +40,83 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+GLOBAL_CSS = """
+<style>
+/* ── App-wide theme polish ─────────────────────────────────────────── */
+.block-container { padding-top: 1.2rem; max-width: 1400px; }
+[data-testid="stMetric"] {
+  background: linear-gradient(160deg, rgba(34,197,94,0.06), rgba(59,130,246,0.05));
+  border: 1px solid rgba(148,163,184,0.18);
+  border-radius: 14px;
+  padding: 10px 14px;
+}
+[data-testid="stMetricLabel"] { color: #94a3b8; font-size: 0.74rem; letter-spacing: 0.04em; text-transform: uppercase; }
+div[data-testid="stSidebar"] { background: linear-gradient(180deg, #0d1526 0%, #0b1220 100%); }
+.hero {
+  border-radius: 20px;
+  padding: 26px 30px 22px 30px;
+  margin-bottom: 14px;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(34,197,94,0.22), transparent 42%),
+    radial-gradient(circle at 88% 100%, rgba(59,130,246,0.20), transparent 45%),
+    linear-gradient(135deg, #0f1b31 0%, #101a2e 100%);
+  border: 1px solid rgba(148,163,184,0.20);
+  box-shadow: 0 8px 40px rgba(2,6,23,0.45);
+}
+.hero h1 { margin: 0; font-size: 1.75rem; color: #f1f5f9; letter-spacing: -0.01em; }
+.hero .sub { color: #94a3b8; font-size: 0.92rem; margin-top: 6px; }
+.hero-pills { margin-top: 14px; }
+.pill {
+  display: inline-block; border-radius: 999px; padding: 4px 13px;
+  font-size: 0.74rem; font-weight: 700; margin-right: 8px; letter-spacing: 0.03em;
+  border: 1px solid rgba(148,163,184,0.25); color: #cbd5e1; background: rgba(15,23,42,0.5);
+}
+.pill.green { color: #4ade80; border-color: rgba(34,197,94,0.45); background: rgba(34,197,94,0.10); }
+.pill.amber { color: #fbbf24; border-color: rgba(245,158,11,0.45); background: rgba(245,158,11,0.10); }
+.pill.red   { color: #f87171; border-color: rgba(239,68,68,0.45);  background: rgba(239,68,68,0.10); }
+.pill.blue  { color: #93c5fd; border-color: rgba(59,130,246,0.45); background: rgba(59,130,246,0.10); }
+.step-card {
+  border-radius: 16px; padding: 18px 20px; height: 100%;
+  background: linear-gradient(160deg, rgba(30,41,59,0.65), rgba(15,23,42,0.65));
+  border: 1px solid rgba(148,163,184,0.22);
+}
+.step-num {
+  display:inline-flex; align-items:center; justify-content:center;
+  width: 30px; height: 30px; border-radius: 10px; font-weight: 800;
+  background: rgba(34,197,94,0.16); color: #4ade80; margin-bottom: 10px;
+}
+.step-card h4 { margin: 0 0 6px 0; color: #e2e8f0; }
+.step-card p { color: #94a3b8; font-size: 0.85rem; margin: 0; }
+</style>
+"""
+
+
+def hero_header(authed: bool, live: bool, market_open: bool) -> None:
+    mode_pill = (
+        "<span class='pill red'>LIVE MONEY</span>" if (authed and live)
+        else "<span class='pill amber'>DRY-RUN</span>"
+    )
+    auth_pill = (
+        "<span class='pill green'>● KITE CONNECTED</span>" if authed
+        else "<span class='pill'>○ NOT LOGGED IN</span>"
+    )
+    mkt_pill = (
+        "<span class='pill blue'>MARKET OPEN</span>" if market_open
+        else "<span class='pill'>MARKET CLOSED</span>"
+    )
+    st.markdown(
+        "<div class='hero'>"
+        "<h1>⚡ Zerodha Intraday Bot</h1>"
+        "<div class='sub'>NIFTY-500 · ₹40–600 price band · ₹2,000/day capital · "
+        "daily loss capped at ₹200 (10%) · auto square-off 15:15 IST</div>"
+        f"<div class='hero-pills'>{auth_pill}{mode_pill}{mkt_pill}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 # Paint immediately so Streamlit Cloud never shows a blank page while imports/init run.
-st.title("Zerodha Intraday Bot")
+st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 _boot_status = st.empty()
 _boot_status.info("Loading dashboard…")
 
@@ -510,6 +585,217 @@ def sidebar() -> None:
                     st.error(f"Login failed: {exc}. Generate a fresh token and retry quickly.")
 
 
+def _exchange_pasted_token(raw: str) -> tuple[bool, str]:
+    """Exchange a pasted request_token (or full redirect URL) for a Kite session.
+    Returns (ok, message). On success, session_state is updated."""
+    from urllib.parse import urlparse, parse_qs
+
+    token = (raw or "").strip()
+    if "request_token=" in token:  # user pasted the whole redirect URL
+        qs = parse_qs(urlparse(token).query)
+        token = (qs.get("request_token") or [""])[0]
+    if not token:
+        return False, "Paste a request_token (or the full redirect URL) first."
+    try:
+        zerodha_auth.exchange_request_token(token)
+        ok, profile = zerodha_auth.validate_token()
+    except Exception as exc:
+        log.exception("kite_manual_token_exchange_failed")
+        return False, f"Login failed: {exc}. Generate a fresh token and retry quickly."
+    if ok and profile:
+        ss.authed = True
+        ss.profile = {
+            "user_id": profile.get("user_id"),
+            "user_name": profile.get("user_name"),
+            "email": profile.get("email"),
+        }
+        log.info("kite_manual_token_exchange_success")
+        return True, "Logged in."
+    return False, "Token accepted but profile validation failed. Try a fresh token."
+
+
+def login_hero() -> None:
+    """Main-page login flow: open Kite, paste the request_token, connect."""
+    if ss.get("_oauth_error"):
+        st.error(ss._oauth_error)
+    login_url = zerodha_auth.generate_login_url()
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(
+            "<div class='step-card'><span class='step-num'>1</span>"
+            "<h4>Login to Kite</h4>"
+            "<p>Zerodha verifies your credentials and 2FA on its own page — "
+            "this app never sees your password.</p></div>",
+            unsafe_allow_html=True,
+        )
+        st.link_button("🔐 Open Kite login", login_url, use_container_width=True, type="primary")
+    with c2:
+        st.markdown(
+            "<div class='step-card'><span class='step-num'>2</span>"
+            "<h4>Copy the token</h4>"
+            "<p>After login, Kite redirects to a URL containing "
+            "<code>request_token=…</code>. Copy the token — or the whole URL. "
+            "It expires in ~2 minutes, so be quick.</p></div>",
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            "<div class='step-card'><span class='step-num'>3</span>"
+            "<h4>Paste &amp; connect</h4>"
+            "<p>Paste below and hit Connect. You'll then choose "
+            "<b>Monitor</b> or <b>Live trade</b>.</p></div>",
+            unsafe_allow_html=True,
+        )
+
+    st.write("")
+    pc1, pc2 = st.columns([3, 1])
+    raw = pc1.text_input(
+        "request_token or full redirect URL",
+        key="hero_request_token",
+        autocomplete="off",
+        placeholder="e.g. 1cYvT5nkL88piDYZdO8xaF2NBcx3TngB — or paste the whole redirect URL",
+        label_visibility="collapsed",
+    )
+    if pc2.button("⚡ Connect", use_container_width=True, type="primary", key="hero_auth_btn"):
+        ok, msg = _exchange_pasted_token(raw)
+        if ok:
+            st.rerun()
+        else:
+            st.error(msg)
+
+    min_tgt, _, max_trades, _, _ = _intraday_rules()
+    st.caption(
+        f"Hard rules once trading: SL <10% · Target ≥{min_tgt:g}% · max {max_trades} trades/day · "
+        f"daily loss auto-halt at ₹{settings.MAX_DAILY_LOSS:,.0f} · NSE 9:15–15:30 IST only."
+    )
+
+
+def _active_kite_user_id() -> str:
+    """Kite user_id of the process-wide session (from the saved token file)."""
+    try:
+        import json as _json
+        with open(zerodha_auth.token_file) as f:
+            return str((_json.load(f) or {}).get("user_id") or "").strip().upper()
+    except Exception:
+        return ""
+
+
+def session_status_view() -> None:
+    """Read-only status page for a second device (e.g. mobile over 5G) when a
+    trading session is already running in this process. Gated by Kite User ID so
+    a stranger hitting the public URL sees nothing."""
+    active_uid = _active_kite_user_id()
+    if active_uid and not ss.get("viewer_verified"):
+        st.markdown(
+            "<div class='step-card'><h4>📡 A trading session is running</h4>"
+            "<p>Enter the <b>Kite User ID</b> of the logged-in account to view "
+            "its live status (read-only, no password needed).</p></div>",
+            unsafe_allow_html=True,
+        )
+        v1, v2 = st.columns([3, 1])
+        uid = v1.text_input(
+            "Kite User ID", key="viewer_uid", autocomplete="off",
+            placeholder="e.g. AB1234", label_visibility="collapsed",
+        )
+        if v2.button("View status", use_container_width=True, type="primary", key="viewer_btn"):
+            if (uid or "").strip().upper() == active_uid:
+                ss.viewer_verified = True
+                st.rerun()
+            else:
+                st.error("User ID does not match the active Kite session.")
+        return
+    st.success(
+        "📡 A trading session is already running — live status below. "
+        "You're viewing as a monitor; no login needed."
+    )
+    snap = get_engine().snapshot()
+    _, _, _, session_capital, _ = _intraday_rules()
+    try:
+        cap = session_capital()
+    except Exception:
+        cap = float(settings.DAILY_CAPITAL)
+    safe("top_strip", top_status_strip, cap, snap)
+    safe("auto_mode", auto_mode_status_strip, cap, snap)
+    st.divider()
+    safe("agent_flow", main_agent_flow_panel)
+    safe("brackets", brackets_panel)
+    safe("activity", activity_feed, snap)
+    st.divider()
+    with st.expander("🔐 Login to take control of this session"):
+        login_hero()
+
+
+def mode_selector(snap) -> None:
+    """Big, explicit choice after login: watch the market, or trade for real."""
+    orch = get_orch()
+    orch_auto = bool(orch.bus.get("auto_execute") or False)
+    live = bool(getattr(settings, "ENABLE_LIVE_TRADING", False))
+
+    with st.container(border=True):
+        if not snap.enabled:
+            st.markdown("#### What would you like to do?")
+            m1, m2 = st.columns(2)
+            with m1:
+                st.markdown(
+                    "<div class='step-card'><h4>👁 Monitor</h4>"
+                    "<p>Starts the 9-agent loop: live scans, signals, market regime, "
+                    "positions — but <b>never places an order</b>.</p></div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("Start monitoring", use_container_width=True, key="mode_monitor_btn"):
+                    get_engine().enable()
+                    get_engine().set_auto_execute(False)
+                    if not orch_running():
+                        orch.start_all()
+                    orch.set_auto_execute(False)
+                    ss.agents_running = True
+                    ss["auto_exec_checkbox"] = False
+                    st.rerun()
+            with m2:
+                st.markdown(
+                    "<div class='step-card'><h4>🚀 Live trade</h4>"
+                    "<p>Everything Monitor does, plus auto-execution of approved "
+                    "setups during 10:15–14:45 IST — <b>real MIS orders, real money</b>.</p></div>",
+                    unsafe_allow_html=True,
+                )
+                confirm = st.checkbox(
+                    "I understand real orders will be placed with real money",
+                    key="mode_live_confirm",
+                )
+                if st.button(
+                    "Start live trading", type="primary", use_container_width=True,
+                    key="mode_live_btn", disabled=not confirm,
+                ):
+                    get_engine().enable()
+                    get_engine().set_auto_execute(False)
+                    if not orch_running():
+                        orch.start_all()
+                    orch.set_auto_execute(True)
+                    ss.agents_running = True
+                    ss["auto_exec_checkbox"] = True
+                    ss["auto_exec_confirm"] = True
+                    st.rerun()
+            if not live:
+                st.warning(
+                    "`ENABLE_LIVE_TRADING` is **false** — even 'Live trade' will only simulate "
+                    "orders (DRY-RUN). Set it to `true` in `.env`/Secrets for real orders."
+                )
+        else:
+            mode = "🚀 LIVE TRADING" if (orch_auto and live) else ("🧪 DRY-RUN AUTO" if orch_auto else "👁 MONITORING")
+            b1, b2 = st.columns([3, 1])
+            b1.markdown(f"**Session active:** {mode} — the 9-agent loop is scanning. Use the sidebar to fine-tune.")
+            if b2.button("⏹ Stop session", use_container_width=True, key="mode_stop_btn"):
+                get_engine().disable()
+                get_engine().set_auto_execute(False)
+                orch.set_auto_execute(False)
+                if orch_running():
+                    orch.shutdown()
+                ss.agents_running = False
+                ss["auto_exec_checkbox"] = False
+                st.rerun()
+
+
 def sidebar_funds() -> None:
     """Live funds & margins from Zerodha (equity segment)."""
     st.sidebar.subheader("Zerodha funds (equity)")
@@ -565,6 +851,7 @@ def sidebar_engine_controls() -> None:
                 if orch_running():
                     get_orch().shutdown()
                 ss.agents_running = False
+                st.rerun()
         else:
             if st.sidebar.button(
                 "▶️ Enable bot", type="primary", use_container_width=True, key="enable_bot_btn"
@@ -582,6 +869,7 @@ def sidebar_engine_controls() -> None:
                 ss.agents_running = True
                 ss["auto_exec_checkbox"] = True
                 ss["auto_exec_confirm"] = True
+                st.rerun()
     except Exception as e:
         log.exception("Bot toggle failed")
         st.sidebar.error(f"Toggle failed: {e}")
@@ -1419,6 +1707,7 @@ def dashboard() -> None:
     _, _, _, session_capital, _ = _intraday_rules()
     cap = session_capital()
     safe("shared_session", shared_session_notice)
+    safe("mode_selector", mode_selector, snap)
     safe("top_strip", top_status_strip, cap, snap)
     safe("auto_mode", auto_mode_status_strip, cap, snap)
     st.divider()
@@ -1529,18 +1818,32 @@ try:
         except Exception:
             log.exception("render bracket poll failed")
     _boot_status.empty()
-    st.caption(f"Real-money · {datetime.now().strftime('%H:%M:%S')}")
+    try:
+        _mkt_open, _ = can_place_nse_bse_equity_trade()
+    except Exception:
+        _mkt_open = False
+    hero_header(
+        bool(ss.authed),
+        bool(getattr(settings, "ENABLE_LIVE_TRADING", False)),
+        bool(_mkt_open),
+    )
     sidebar()
     if ss.authed:
         dashboard()
     else:
-        min_tgt, _, max_trades, _, _ = _intraday_rules()
-        st.info(
-            f"Log in via the **left pane**. Hard rules: SL <10%, Target ≥{min_tgt:g}%, "
-            f"NSE/BSE 9:15–15:30 IST only, max {max_trades} trades/day."
-        )
-        redirect = settings.KITE_REDIRECT_URL.strip()
-        st.caption(f"Kite redirect URL: `{redirect}`")
+        # Second device (e.g. mobile) while a session is live: show its status
+        # instead of the login flow. The Kite token + engine are process-wide.
+        _session_live = False
+        try:
+            _session_live = get_engine().snapshot().enabled or orch_running()
+        except Exception:
+            pass
+        if _session_live:
+            session_status_view()
+        else:
+            login_hero()
+            redirect = settings.KITE_REDIRECT_URL.strip()
+            st.caption(f"Kite redirect URL: `{redirect}`")
         if is_streamlit_cloud():
             st.markdown(
                 f"**Cloud checklist:** Kite console redirect = `{CLOUD_APP_URL}` · "

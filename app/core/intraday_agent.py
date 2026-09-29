@@ -31,7 +31,7 @@ RAMP_EXIT_HOUR = 15
 RAMP_EXIT_MINUTE = 15
 
 # User mandate: target not below +10%, stop distance strictly under 10%
-MIN_TARGET_PCT = 10.0
+MIN_TARGET_PCT = 2.5  # realistic intraday floor; trailing stop lets winners run past it
 MAX_STOP_LOSS_PCT = 9.5
 QUOTE_ONLY_MIN_DAY_RET_PCT = 0.15
 

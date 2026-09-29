@@ -2,6 +2,7 @@
 FastAPI server for Zerodha authentication and status endpoints.
 """
 import os
+from html import escape
 
 # Trust the OS keychain so corporate MITM TLS proxies work (must run before any HTTPS).
 try:
@@ -129,8 +130,9 @@ async def auth_callback(
     """
     OAuth callback from Zerodha (must match KITE_REDIRECT_URL).
 
-    Default: 302-redirect to the Streamlit dashboard with the ``request_token`` attached.
-    The Streamlit app auto-exchanges it for an access token on first render.
+    Default: show a copyable token page and DO NOT consume the ``request_token``.
+    This is the safest local-dev flow because Kite request tokens are single-use
+    and checksum errors are easier to diagnose from the Streamlit UI/manual paste.
 
     ``?format=json`` — legacy: exchange token here and return JSON (kept for tests).
     """
@@ -156,10 +158,38 @@ async def auth_callback(
                     "status": status,
                 },
             )
-        return RedirectResponse(url=f"{streamlit_base}/?auth_error=cancelled", status_code=302)
+        return HTMLResponse(
+            """
+            <html><body style="font-family: system-ui; margin: 40px;">
+            <h2>Kite login failed or was cancelled</h2>
+            <p>No <code>request_token</code> was returned by Kite.</p>
+            </body></html>
+            """,
+            status_code=400,
+        )
 
-    # Exchange the request_token here (single-use, expires fast) and persist the access_token.
-    # Streamlit then just reads the saved token — no token passing in URL.
+    if not wants_json:
+        safe_token = escape(request_token)
+        safe_streamlit = escape(streamlit_base)
+        return HTMLResponse(
+            f"""
+            <html>
+              <body style="font-family: system-ui; margin: 40px; line-height: 1.5;">
+                <h2>Kite request token received</h2>
+                <p>This page intentionally does <b>not</b> consume the one-time token.</p>
+                <label style="display:block; margin-bottom: 8px;">Copy this request_token:</label>
+                <input value="{safe_token}" readonly onclick="this.select()"
+                       style="width: 100%; max-width: 760px; font-size: 16px; padding: 10px;" />
+                <p>Now return to <a href="{safe_streamlit}">{safe_streamlit}</a>,
+                open <b>Trouble logging in? Paste token manually</b>, paste the token, and click
+                <b>Authenticate</b>. Tokens expire quickly, so do this immediately.</p>
+              </body>
+            </html>
+            """,
+            status_code=200,
+        )
+
+    # JSON/test mode only: exchange the request_token here (single-use).
     try:
         session_data = zerodha_auth.exchange_request_token(request_token)
         log_event(
