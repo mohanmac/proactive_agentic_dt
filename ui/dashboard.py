@@ -1781,14 +1781,13 @@ def auto_logoff_after_close() -> None:
     15:40 is the post-square-off boundary (REGULAR_END 15:30 → CLOSING_START 15:40),
     so MIS positions are already flat.
 
-    CRITICAL: only the browser session that armed the bot performs the shared
-    shutdown/logout. Other devices may attach as monitors; they must never log
-    out the shared Kite token or stop the process-wide agent loop.
+    Fires for EVERY logged-in session once the market day is over — trading
+    session, monitors, and fresh logins alike — so no device stays signed into
+    Kite after close. A user who logs back in after 15:40 for review is not
+    kicked again the same day (_auto_logged_off_date guard).
     """
     if not ss.authed:
         return
-    if not ss.get("agents_running"):
-        return  # nothing was trading — don't kick a review/after-hours login
     from datetime import time as _t
     now = ist_now()
     if not is_nse_bse_trading_day(now.date()):
@@ -1803,9 +1802,9 @@ def auto_logoff_after_close() -> None:
     except Exception:
         log.exception("auto_logoff: engine.disable failed")
     try:
-        if ss.agents_running:
+        if orch_running():
             get_orch().shutdown()
-            ss.agents_running = False
+        ss.agents_running = False
     except Exception:
         log.exception("auto_logoff: orchestrator shutdown failed")
     try:
