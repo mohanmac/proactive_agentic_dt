@@ -1720,6 +1720,86 @@ def guardrails_panel() -> None:
     )
 
 
+SMOKE_TEST_SYMBOLS = ["YESBANK", "IDEA", "IRFC", "SAIL", "TATASTEEL"]
+
+
+def smoke_test_panel() -> None:
+    """One-click real-money plumbing test: buy 1 share of each selected liquid
+    stock (MIS market order), hold 60s, sell. Deliberately bypasses the
+    strategy/signal guardrails — market-hours and live-mode checks still apply.
+    Needs no market-data permission (market orders only)."""
+    st.subheader("Real-money smoke test")
+    st.caption(
+        "Verifies the full order path with the smallest possible stake: "
+        "**BUY 1 share** of each selected stock → hold **60 s** → **SELL**. "
+        "Total exposure ≈ price of 1 share each; cost ≈ brokerage + spread."
+    )
+    ok_mkt, msg = can_place_nse_bse_equity_trade()
+    if not ok_mkt:
+        st.warning(f"Market gate closed — run this 9:15–15:00 IST on a trading day. ({msg})")
+        return
+    if not bool(getattr(settings, "ENABLE_LIVE_TRADING", False)):
+        st.error("ENABLE_LIVE_TRADING is false — smoke test needs live mode.")
+        return
+    now_t = ist_now().time()
+    from datetime import time as _t
+    if now_t >= _t(15, 0):
+        st.warning("Past 15:00 IST — too close to square-off to start a buy/sell test.")
+        return
+    syms = st.multiselect(
+        "Stocks (cheap & liquid — 1 share each)", SMOKE_TEST_SYMBOLS,
+        default=SMOKE_TEST_SYMBOLS[:2], key="smoke_syms",
+    )
+    confirm = st.checkbox(
+        "I understand this places REAL buy and sell market orders now",
+        key="smoke_confirm",
+    )
+    if not st.button(
+        "▶ Run smoke test", type="primary", key="smoke_btn",
+        disabled=not (confirm and syms),
+    ):
+        return
+    import time as _time
+    kite = zerodha_auth.get_kite_instance()
+    bought: list[str] = []
+    for s in syms:
+        try:
+            oid = kite.place_order(
+                variety=kite.VARIETY_REGULAR, exchange=kite.EXCHANGE_NSE,
+                tradingsymbol=s, transaction_type=kite.TRANSACTION_TYPE_BUY,
+                quantity=1, product=kite.PRODUCT_MIS,
+                order_type=kite.ORDER_TYPE_MARKET,
+            )
+            bought.append(s)
+            st.success(f"🟢 BUY {s} ×1 placed — order {oid}")
+            log.info("smoke_test_buy symbol=%s order_id=%s", s, oid)
+        except Exception as e:
+            st.error(f"BUY {s} failed: {e}")
+            log.exception("smoke_test_buy_failed symbol=%s", s)
+    if not bought:
+        st.error("No buys succeeded — nothing to sell. See errors above.")
+        return
+    with st.spinner("Holding for 60 seconds…"):
+        _time.sleep(60)
+    for s in bought:
+        try:
+            oid = kite.place_order(
+                variety=kite.VARIETY_REGULAR, exchange=kite.EXCHANGE_NSE,
+                tradingsymbol=s, transaction_type=kite.TRANSACTION_TYPE_SELL,
+                quantity=1, product=kite.PRODUCT_MIS,
+                order_type=kite.ORDER_TYPE_MARKET,
+            )
+            st.success(f"🔴 SELL {s} ×1 placed — order {oid}")
+            log.info("smoke_test_sell symbol=%s order_id=%s", s, oid)
+        except Exception as e:
+            st.error(f"SELL {s} failed — SQUARE OFF MANUALLY in the Kite app: {e}")
+            log.exception("smoke_test_sell_failed symbol=%s", s)
+    st.success(
+        "Smoke test complete — verify fills in the Order book tab or the Kite app. "
+        "If every order shows COMPLETE, real-money trading is confirmed working."
+    )
+
+
 def dashboard() -> None:
     snap = get_engine().snapshot()
     _, _, _, session_capital, _ = _intraday_rules()
@@ -1735,7 +1815,7 @@ def dashboard() -> None:
     st.divider()
     left, right = st.columns([3, 2])
     with left:
-        tabs = st.tabs(["Signals", "Why not trading?", "Order book", "Guardrails"])
+        tabs = st.tabs(["Signals", "Why not trading?", "Order book", "Guardrails", "Test trade"])
         with tabs[0]:
             safe("signals", signals_panel, cap, snap)
         with tabs[1]:
@@ -1744,6 +1824,8 @@ def dashboard() -> None:
             safe("order_book", order_book_panel)
         with tabs[3]:
             safe("guardrails", guardrails_panel)
+        with tabs[4]:
+            safe("smoke_test", smoke_test_panel)
     with right:
         safe("positions", positions_panel)
         safe("brackets", brackets_panel)
